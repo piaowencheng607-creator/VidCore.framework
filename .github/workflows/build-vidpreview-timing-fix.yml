@@ -37,7 +37,15 @@ jobs:
           set -euxo pipefail
           brew install nasm meson ninja pkg-config autoconf automake libtool
 
+      - name: Cache official FFmpeg build output
+        id: ffmpeg-cache
+        uses: actions/cache@v4
+        with:
+          path: VidCore/Frameworks/FFmpeg
+          key: vidcore-ffmpeg-macos26-xcode26.6-${{ hashFiles('VidCore/Scripts/build-ffmpeg.sh') }}
+
       - name: Build FFmpeg using the official VidCore script
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
         working-directory: VidCore/Scripts
         run: |
           set -euxo pipefail

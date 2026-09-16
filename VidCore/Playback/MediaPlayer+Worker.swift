@@ -64,10 +64,13 @@ extension MediaPlayer: PlaybackWorkerDelegate {
             }
 
             guard !Task.isCancelled, state == .playing else { return }
-            currentTime = targetEndTime
-            state = .finished
             stopTimeUpdates()
             await playbackClock.pause()
+            // A display-link callback may already be awaiting the clock when EOF
+            // is reached. Publish the clamped final time only after the clock is
+            // paused so that callback cannot overwrite it with an overshoot.
+            currentTime = targetEndTime
+            state = .finished
             await audioOutput.flush()
             finishTask = nil
         }
