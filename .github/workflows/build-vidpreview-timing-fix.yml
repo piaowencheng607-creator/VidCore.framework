@@ -39,7 +39,7 @@ jobs:
 
       - name: Cache official FFmpeg build output
         id: ffmpeg-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: VidCore/Frameworks/FFmpeg
           key: vidcore-ffmpeg-macos26-xcode26.6-${{ hashFiles('VidCore/Scripts/build-ffmpeg.sh') }}
@@ -53,6 +53,13 @@ jobs:
           # The official script ends with an interactive cleanup prompt. CI keeps
           # the build tree and supplies the default "no" response explicitly.
           printf 'n\n' | ./build-ffmpeg.sh
+
+      - name: Save official FFmpeg build output
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: VidCore/Frameworks/FFmpeg
+          key: ${{ steps.ffmpeg-cache.outputs.cache-primary-key }}
 
       - name: Run QuickTime PNG timing regression tests
         run: |
@@ -73,8 +80,8 @@ jobs:
       - name: Prove both named XCTest cases passed
         run: |
           set -euxo pipefail
-          grep -E "Test case .*testQuickTimePNGUsesFrameTimelineAndDrainsEveryFrame.*passed" "$RUNNER_TEMP/ci-logs/vidcore-tests.log"
-          grep -E "Test case .*testPlayerDoesNotFinishBeforeLastQueuedFrameDuration.*passed" "$RUNNER_TEMP/ci-logs/vidcore-tests.log"
+          grep -E "Test Case .*testQuickTimePNGUsesFrameTimelineAndDrainsEveryFrame.*passed" "$RUNNER_TEMP/ci-logs/vidcore-tests.log"
+          grep -E "Test Case .*testPlayerDoesNotFinishBeforeLastQueuedFrameDuration.*passed" "$RUNNER_TEMP/ci-logs/vidcore-tests.log"
 
       - name: Checkout VidPreview as VidCore sibling
         uses: actions/checkout@v4
