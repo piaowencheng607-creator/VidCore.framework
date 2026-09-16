@@ -37,6 +37,9 @@ public struct VideoFrame: @unchecked Sendable {
     /// The presentation timestamp in seconds from the start of the video.
     public let presentationTime: Double
 
+    /// The duration of this frame in seconds, or zero when unknown.
+    public let duration: Double
+
     /// Whether this frame contains HDR content (PQ or HLG transfer function).
     public let isHDR: Bool
 
@@ -71,6 +74,8 @@ public struct VideoFrame: @unchecked Sendable {
     ) {
         self.sampleBuffer = sampleBuffer
         self.presentationTime = presentationTime
+        let sampleDuration = CMTimeGetSeconds(sampleBuffer.duration)
+        self.duration = sampleDuration.isFinite && sampleDuration > 0 ? sampleDuration : 0
         self.isHDR = isHDR
         self.colorTransfer = colorTransfer ?? (isHDR ? 16 : 1)
         self.doviProfile = doviProfile
@@ -87,6 +92,7 @@ public struct VideoFrame: @unchecked Sendable {
     public init?(
         pixelBuffer: CVPixelBuffer,
         presentationTime: Double,
+        duration: Double = 0,
         isHDR: Bool = false,
         colorTransfer: Int? = nil,
         doviProfile: Int = 0,
@@ -95,7 +101,8 @@ public struct VideoFrame: @unchecked Sendable {
         // Create a CMSampleBuffer wrapping the pixel buffer.
         var sampleBuffer: CMSampleBuffer?
         var timing = CMSampleTimingInfo(
-            duration: .invalid,
+            duration: duration > 0
+                ? CMTime(seconds: duration, preferredTimescale: 60000) : .invalid,
             presentationTimeStamp: CMTime(seconds: presentationTime, preferredTimescale: 60000),
             decodeTimeStamp: .invalid
         )
@@ -123,6 +130,7 @@ public struct VideoFrame: @unchecked Sendable {
         self.sampleBuffer = sbuf
 
         self.presentationTime = presentationTime
+        self.duration = duration > 0 ? duration : 0
         self.isHDR = isHDR
         self.colorTransfer = colorTransfer ?? (isHDR ? 16 : 1)
         self.doviProfile = doviProfile

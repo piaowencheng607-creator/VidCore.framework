@@ -403,6 +403,7 @@ public final class MediaDecoder: @unchecked Sendable {
                     if let frame = self.makeVideoFrame(
                         pixelBuffer: ffmpegFrame.pixelBuffer,
                         presentationTime: ffmpegFrame.presentationTime,
+                        duration: ffmpegFrame.duration,
                         doviProfile: Int(ffmpegFrame.doviProfile),
                         ambientLightMetadata: ffmpegFrame.ambientLightMetadata
                     ) {
@@ -495,6 +496,7 @@ public final class MediaDecoder: @unchecked Sendable {
         return self.makeVideoFrame(
             pixelBuffer: videoFrameObj.pixelBuffer,
             presentationTime: videoFrameObj.presentationTime,
+            duration: videoFrameObj.duration,
             doviProfile: Int(videoFrameObj.doviProfile),
             ambientLightMetadata: videoFrameObj.ambientLightMetadata
         )

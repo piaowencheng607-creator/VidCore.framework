@@ -97,6 +97,7 @@ static enum AVPixelFormat get_hw_format(AVCodecContext *ctx,
 @property(nonatomic, assign) int32_t audioTimeBaseDen;
 @property(nonatomic, assign) int32_t subtitleTimeBaseNum;
 @property(nonatomic, assign) int32_t subtitleTimeBaseDen;
+@property(nonatomic, assign) double videoNextPTS;
 @property(nonatomic, assign) double audioNextPTS;
 @property(nonatomic, assign) int32_t swrSrcSampleRate;
 @property(nonatomic, assign) int32_t swrSrcChannels;
@@ -108,6 +109,14 @@ static enum AVPixelFormat get_hw_format(AVCodecContext *ctx,
 static const enum AVSampleFormat kAudioSampleFormat = AV_SAMPLE_FMT_FLTP;
 static const int kAudioSampleRateFallback = 48000;
 static const int kAudioChannelsFallback = 2; // Stereo
+
+static BOOL IsValidTimeBase(AVRational timeBase) {
+  return timeBase.num > 0 && timeBase.den > 0;
+}
+
+static double SecondsFromTimestamp(int64_t timestamp, AVRational timeBase) {
+  return (double)timestamp * av_q2d(timeBase);
+}
 
 // Static variable to store the expected hw pixel format for the callback
 static enum AVPixelFormat s_hwPixelFormat = AV_PIX_FMT_NONE;
@@ -227,6 +236,7 @@ static enum AVPixelFormat get_hw_format(AVCodecContext *ctx,
     _usingHardwareDecoder = NO;
     _hwPixelFormat = AV_PIX_FMT_VIDEOTOOLBOX;
     _pixelFormatConverter = [[PixelFormatConverter alloc] init];
+    _videoNextPTS = -1.0;
     _audioNextPTS = -1.0;
 
     _subtitleStreamIndex = -1;
@@ -296,7 +306,6 @@ static enum AVPixelFormat get_hw_format(AVCodecContext *ctx,
       if (_videoTimeBaseDen > 0) {
         AVRational tb = (AVRational){_videoTimeBaseNum, _videoTimeBaseDen};
         _codecContext->pkt_timebase = tb;
-        _codecContext->time_base = tb;
       }
 
       // Set extradata
@@ -576,20 +585,31 @@ static enum AVPixelFormat get_hw_format(AVCodecContext *ctx,
       break;
     }
 
-    int64_t finalPts = _frame->pts;
+    int64_t finalPts = _frame->best_effort_timestamp;
     if (finalPts == AV_NOPTS_VALUE) {
-      finalPts = _frame->best_effort_timestamp;
+      finalPts = _frame->pts;
     }
 
-    double pts = 0.0;
-    if (finalPts != AV_NOPTS_VALUE) {
-      if (_videoTimeBaseDen > 0) {
-        pts = (double)finalPts * (double)_videoTimeBaseNum /
-              (double)_videoTimeBaseDen;
-      }
+    AVRational streamTimeBase =
+        (AVRational){_videoTimeBaseNum, _videoTimeBaseDen};
+    AVRational frameTimeBase = IsValidTimeBase(_frame->time_base)
+                                       ? _frame->time_base
+                                       : streamTimeBase;
+    double duration = 0.0;
+    if (_frame->duration > 0 && IsValidTimeBase(frameTimeBase)) {
+      duration = SecondsFromTimestamp(_frame->duration, frameTimeBase);
+    } else if (_videoInfo.frameRate > 0.0) {
+      duration = 1.0 / _videoInfo.frameRate;
     }
 
-    FFmpegVideoFrame *videoFrame = [self createVideoFrameFromDecodedFrame:pts];
+    double pts = _videoNextPTS >= 0.0 ? _videoNextPTS : 0.0;
+    if (finalPts != AV_NOPTS_VALUE && IsValidTimeBase(frameTimeBase)) {
+      pts = SecondsFromTimestamp(finalPts, frameTimeBase);
+    }
+    _videoNextPTS = pts + duration;
+
+    FFmpegVideoFrame *videoFrame =
+        [self createVideoFrameFromDecodedFrame:pts duration:duration];
     if (!videoFrame) {
       continue; // Skip this frame but keep draining
     }
@@ -870,15 +890,30 @@ static enum AVPixelFormat get_hw_format(AVCodecContext *ctx,
     return nil;
   }
 
-  double pts = 0.0;
-  if (_frame->pts != AV_NOPTS_VALUE) {
-    if (_videoTimeBaseDen > 0) {
-      pts = (double)_frame->pts * (double)_videoTimeBaseNum /
-            (double)_videoTimeBaseDen;
-    }
+  int64_t finalPts = _frame->best_effort_timestamp;
+  if (finalPts == AV_NOPTS_VALUE) {
+    finalPts = _frame->pts;
   }
 
-  return [self createVideoFrameFromDecodedFrame:pts];
+  AVRational streamTimeBase =
+      (AVRational){_videoTimeBaseNum, _videoTimeBaseDen};
+  AVRational frameTimeBase = IsValidTimeBase(_frame->time_base)
+                                     ? _frame->time_base
+                                     : streamTimeBase;
+  double duration = 0.0;
+  if (_frame->duration > 0 && IsValidTimeBase(frameTimeBase)) {
+    duration = SecondsFromTimestamp(_frame->duration, frameTimeBase);
+  } else if (_videoInfo.frameRate > 0.0) {
+    duration = 1.0 / _videoInfo.frameRate;
+  }
+
+  double pts = _videoNextPTS >= 0.0 ? _videoNextPTS : 0.0;
+  if (finalPts != AV_NOPTS_VALUE && IsValidTimeBase(frameTimeBase)) {
+    pts = SecondsFromTimestamp(finalPts, frameTimeBase);
+  }
+  _videoNextPTS = pts + duration;
+
+  return [self createVideoFrameFromDecodedFrame:pts duration:duration];
 }
 
 - (void)flushAudioDecoder {
@@ -951,6 +986,7 @@ static enum AVPixelFormat get_hw_format(AVCodecContext *ctx,
   if (_subtitleCodecContext) {
     avcodec_flush_buffers(_subtitleCodecContext);
   }
+  _videoNextPTS = -1.0;
   _audioNextPTS = -1.0;
 }
 
@@ -1290,7 +1326,8 @@ static enum AVPixelFormat get_hw_format(AVCodecContext *ctx,
   }
 }
 
-- (nullable FFmpegVideoFrame *)createVideoFrameFromDecodedFrame:(double)pts {
+- (nullable FFmpegVideoFrame *)createVideoFrameFromDecodedFrame:(double)pts
+                                                       duration:(double)duration {
   CVPixelBufferRef pixelBuffer = NULL;
   if (_usingHardwareDecoder && _frame->format == _hwPixelFormat) {
     pixelBuffer = [self extractPixelBufferFromHardwareFrame:_frame];
@@ -1309,6 +1346,7 @@ static enum AVPixelFormat get_hw_format(AVCodecContext *ctx,
   videoFrame.type = FFmpegFrameTypeVideo;
   videoFrame.pixelBuffer = pixelBuffer;
   videoFrame.presentationTime = pts;
+  videoFrame.duration = duration;
   videoFrame.doviProfile = _videoInfo.doviProfile;
 
   // Extract Ambient Viewing Environment side data if present

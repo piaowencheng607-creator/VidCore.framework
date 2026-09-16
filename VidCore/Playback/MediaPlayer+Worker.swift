@@ -41,11 +41,36 @@ extension MediaPlayer: PlaybackWorkerDelegate {
         }
     }
 
-    func workerDidFinishStream() {
+    func workerDidFinishStream(at endTime: Double) {
         guard state == .playing else { return }
-        state = .finished
-        Task { await playbackClock.pause() }
-        Task { await audioOutput.flush() }
+
+        finishTask?.cancel()
+        let targetEndTime = endTime > 0 ? endTime : duration
+        finishTask = Task { [weak self] in
+            guard let self else { return }
+
+            // The packet queue can briefly report a stall just before EOF. Resume
+            // the clock so already-enqueued tail frames can still be presented.
+            if playbackClock.rate == 0 {
+                await playbackClock.setRate(playbackRate)
+            }
+
+            while !Task.isCancelled && state == .playing {
+                let clockTime = await playbackClock.getCurrentTime()
+                if clockTime >= targetEndTime - 0.001 {
+                    break
+                }
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+
+            guard !Task.isCancelled, state == .playing else { return }
+            currentTime = targetEndTime
+            state = .finished
+            stopTimeUpdates()
+            await playbackClock.pause()
+            await audioOutput.flush()
+            finishTask = nil
+        }
     }
 
     func workerDidStall() {

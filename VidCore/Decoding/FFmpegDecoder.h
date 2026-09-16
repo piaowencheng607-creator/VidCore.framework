@@ -85,6 +85,8 @@ typedef NS_ENUM(NSInteger, FFmpegFrameType) {
 @interface FFmpegVideoFrame : FFmpegFrame
 /// The decoded pixel buffer (CVImageBuffer).
 @property(nonatomic, assign) CVPixelBufferRef pixelBuffer;
+/// The decoded frame duration in seconds.
+@property(nonatomic, assign) double duration;
 /// Dolby Vision Profile ID (e.g., 5, 8), 0 if not present.
 @property(nonatomic, assign) int doviProfile;
 /// Per-frame Ambient Viewing Environment metadata.

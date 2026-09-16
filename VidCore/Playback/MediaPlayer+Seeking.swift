@@ -27,6 +27,8 @@ extension MediaPlayer {
     /// This pauses playback, stops the decode loop, and prepares the player for rapid
     /// coalesced seeking. Use `scrub(to:)` to update the position.
     public func beginScrub() async {
+        finishTask?.cancel()
+        finishTask = nil
         // Cancel active seek/scrub
         currentSeekTask?.cancel()
         await decoder?.requestDemuxAbort()

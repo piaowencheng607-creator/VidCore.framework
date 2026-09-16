@@ -12,7 +12,7 @@ protocol PlaybackWorkerDelegate: AnyObject {
     func workerDidRenderVideoFrame(_ frame: VideoFrame)
     func workerDidDecodeSubtitle(_ subtitle: SubtitleFrame)
     func workerDidDetectAudio()
-    func workerDidFinishStream()
+    func workerDidFinishStream(at endTime: Double)
     func workerRefreshDebugStats(videoPTS: Double?) async
     func workerDidStall()
     func workerDidUnstall()
@@ -30,6 +30,7 @@ actor PlaybackWorker {
     private var decodeTask: Task<Void, Never>?
     private var hasSignaledAudio = false
     private var isStalled = false
+    private var streamEndTime = 0.0
 
     init(
         decoder: MediaDecoder?,
@@ -48,6 +49,7 @@ actor PlaybackWorker {
     func updateDecoder(_ decoder: MediaDecoder?) {
         self.decoder = decoder
         hasSignaledAudio = false
+        streamEndTime = 0
     }
 
     func updatePacketQueue(_ packetQueue: PacketQueue) {
@@ -196,7 +198,7 @@ actor PlaybackWorker {
             await processAudioFrame(buffer, pts: pts)
         }
 
-        await delegate?.workerDidFinishStream()
+        await delegate?.workerDidFinishStream(at: streamEndTime)
     }
 
     private func processVideoFrame(_ frame: VideoFrame) async {
@@ -206,6 +208,7 @@ actor PlaybackWorker {
         guard !Task.isCancelled else { return }
 
         await renderer?.enqueue(frame)
+        streamEndTime = max(streamEndTime, frame.presentationTime + frame.duration)
         await delegate?.workerDidRenderVideoFrame(frame)
         await delegate?.workerRefreshDebugStats(videoPTS: frame.presentationTime)
     }
@@ -217,6 +220,10 @@ actor PlaybackWorker {
         guard !Task.isCancelled else { return }
 
         await audioOutput.enqueue(buffer, pts: pts, volume: Float(volume))
+        if buffer.format.sampleRate > 0 {
+            let duration = Double(buffer.frameLength) / buffer.format.sampleRate
+            streamEndTime = max(streamEndTime, pts + duration)
+        }
         if !hasSignaledAudio {
             hasSignaledAudio = true
             await delegate?.workerDidDetectAudio()

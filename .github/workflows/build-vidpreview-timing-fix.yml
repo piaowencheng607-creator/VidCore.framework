@@ -1,0 +1,138 @@
+name: Build VidPreview timing fix
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/quicktime-png-timing-fix
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: macos-26
+    timeout-minutes: 180
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout patched VidCore
+        uses: actions/checkout@v4
+        with:
+          path: VidCore
+
+      - name: Print runner toolchain
+        run: |
+          set -euxo pipefail
+          sw_vers
+          xcodebuild -version
+          swift --version
+          uname -m
+
+      - name: Install VidCore build dependencies
+        run: |
+          set -euxo pipefail
+          brew install nasm meson ninja pkg-config autoconf automake libtool
+
+      - name: Build FFmpeg using the official VidCore script
+        working-directory: VidCore/Scripts
+        run: |
+          set -euxo pipefail
+          chmod +x build-ffmpeg.sh
+          ./build-ffmpeg.sh
+
+      - name: Run QuickTime PNG timing regression tests
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/ci-logs"
+          xcodebuild \
+            -project VidCore/VidCore.xcodeproj \
+            -scheme VidCore \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/VidCoreDerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/VidCoreTimingTests.xcresult" \
+            -only-testing:VidCoreTests/VideoTimingRegressionTests/testQuickTimePNGUsesFrameTimelineAndDrainsEveryFrame \
+            -only-testing:VidCoreTests/VideoTimingRegressionTests/testPlayerDoesNotFinishBeforeLastQueuedFrameDuration \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee "$RUNNER_TEMP/ci-logs/vidcore-tests.log"
+
+      - name: Prove both named XCTest cases passed
+        run: |
+          set -euxo pipefail
+          grep -E "Test case .*testQuickTimePNGUsesFrameTimelineAndDrainsEveryFrame.*passed" "$RUNNER_TEMP/ci-logs/vidcore-tests.log"
+          grep -E "Test case .*testPlayerDoesNotFinishBeforeLastQueuedFrameDuration.*passed" "$RUNNER_TEMP/ci-logs/vidcore-tests.log"
+
+      - name: Checkout VidPreview as VidCore sibling
+        uses: actions/checkout@v4
+        with:
+          repository: ptaru/VidPreview
+          path: VidPreview
+
+      - name: Build complete VidPreview app and extensions
+        run: |
+          set -euxo pipefail
+          xcodebuild \
+            -project VidPreview/VidPreview.xcodeproj \
+            -scheme VidPreview \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/VidPreviewDerivedData" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- \
+            DEVELOPMENT_TEAM= \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            build 2>&1 | tee "$RUNNER_TEMP/ci-logs/vidpreview-build.log"
+
+      - name: Ad-hoc sign and verify complete app bundle
+        run: |
+          set -euxo pipefail
+          APP="$RUNNER_TEMP/VidPreviewDerivedData/Build/Products/Release/VidPreview.app"
+          FRAMEWORK="$APP/Contents/Frameworks/VidCore.framework"
+          QUICKLOOK="$APP/Contents/PlugIns/VidPreviewQuickLook.appex"
+          THUMBNAIL="$APP/Contents/PlugIns/VidPreviewThumbnail.appex"
+
+          test -d "$APP"
+          test -d "$FRAMEWORK"
+          test -d "$QUICKLOOK"
+          test -d "$THUMBNAIL"
+
+          find "$APP" -maxdepth 6 -print | sort | tee "$RUNNER_TEMP/ci-logs/app-contents.log"
+
+          while IFS= read -r -d '' nested_framework; do
+            codesign --force --sign - --timestamp=none "$nested_framework"
+          done < <(find "$APP/Contents/PlugIns" -type d -name '*.framework' -print0)
+          codesign --force --sign - --timestamp=none "$FRAMEWORK"
+          codesign --force --sign - --timestamp=none "$QUICKLOOK"
+          codesign --force --sign - --timestamp=none "$THUMBNAIL"
+          codesign --force --sign - --timestamp=none "$APP"
+
+          codesign --verify --deep --strict --verbose=4 "$APP" 2>&1 | tee "$RUNNER_TEMP/ci-logs/codesign-verify.log"
+          codesign -d --verbose=4 "$APP" 2>&1 | tee "$RUNNER_TEMP/ci-logs/codesign-app.log"
+          codesign -d --entitlements :- "$APP" 2>&1 | tee "$RUNNER_TEMP/ci-logs/entitlements-app.log"
+          codesign -d --entitlements :- "$QUICKLOOK" 2>&1 | tee "$RUNNER_TEMP/ci-logs/entitlements-quicklook.log"
+          codesign -d --entitlements :- "$THUMBNAIL" 2>&1 | tee "$RUNNER_TEMP/ci-logs/entitlements-thumbnail.log"
+
+          set +e
+          spctl --assess --type execute --verbose=4 "$APP" >"$RUNNER_TEMP/ci-logs/spctl.log" 2>&1
+          SPCTL_STATUS=$?
+          set -e
+          cat "$RUNNER_TEMP/ci-logs/spctl.log"
+          echo "spctl_exit_status=$SPCTL_STATUS" | tee -a "$RUNNER_TEMP/ci-logs/spctl.log"
+
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$GITHUB_WORKSPACE/VidPreview-timing-fix-macos26.zip"
+
+      - name: Upload installable app and CI evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VidPreview-timing-fix-macos26
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            VidPreview-timing-fix-macos26.zip
+            ${{ runner.temp }}/ci-logs/
+            ${{ runner.temp }}/VidCoreTimingTests.xcresult/

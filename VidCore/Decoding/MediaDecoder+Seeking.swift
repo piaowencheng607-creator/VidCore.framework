@@ -14,6 +14,7 @@ extension MediaDecoder {
         sampleBuffer: CMSampleBuffer? = nil,
         pixelBuffer: CVPixelBuffer? = nil,
         presentationTime: Double,
+        duration: Double = 0,
         doviProfile: Int = 0,
         ambientLightMetadata: Data? = nil
     ) -> VideoFrame? {
@@ -31,6 +32,7 @@ extension MediaDecoder {
             return self.makeVideoFrame(
                 pixelBuffer: pixelBuffer,
                 presentationTime: presentationTime,
+                duration: duration,
                 doviProfile: doviProfile,
                 ambientLightMetadata: ambientLightMetadata
             )
@@ -383,6 +385,7 @@ extension MediaDecoder {
                                     foundFrame = self.createVideoFrame(
                                         pixelBuffer: f.pixelBuffer,
                                         presentationTime: f.presentationTime,
+                                        duration: f.duration,
                                         doviProfile: Int(f.doviProfile),
                                         ambientLightMetadata: f.ambientLightMetadata
                                     )

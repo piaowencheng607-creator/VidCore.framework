@@ -130,6 +130,8 @@ public class MediaPlayer {
         delegate: self
     )
     var currentSeekTask: Task<Void, Never>?
+    @ObservationIgnored
+    var finishTask: Task<Void, Never>?
     var isScrubbing: Bool = false
     var wasPlayingBeforeScrub: Bool = false
     @ObservationIgnored
@@ -335,6 +337,8 @@ public class MediaPlayer {
     /// Start or resume playback.
     public func play() {
         guard state == .ready || state == .paused || state == .finished else { return }
+        finishTask?.cancel()
+        finishTask = nil
         let clampedRate = max(0.1, min(playbackRate, 32.0))
 
         if state == .finished {
@@ -377,6 +381,8 @@ public class MediaPlayer {
     public func pause() {
         guard state == .playing else { return }
 
+        finishTask?.cancel()
+        finishTask = nil
         pendingPlay = false
         state = .paused
         Task { await playbackClock.pause() }
@@ -409,6 +415,8 @@ public class MediaPlayer {
 
     /// Close the player and release resources.
     public func close() async {
+        finishTask?.cancel()
+        finishTask = nil
         currentSeekTask?.cancel()
         await decoder?.requestDemuxAbort()
         _ = await currentSeekTask?.result
@@ -518,6 +526,8 @@ public class MediaPlayer {
     public nonisolated func cancelAllTasks() {
         cancelLocalTasks()
         Task { @MainActor [weak self] in
+            self?.finishTask?.cancel()
+            self?.finishTask = nil
             self?.currentSeekTask?.cancel()
         }
     }
