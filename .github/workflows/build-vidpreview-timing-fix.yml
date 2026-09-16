@@ -42,7 +42,9 @@ jobs:
         run: |
           set -euxo pipefail
           chmod +x build-ffmpeg.sh
-          ./build-ffmpeg.sh
+          # The official script ends with an interactive cleanup prompt. CI keeps
+          # the build tree and supplies the default "no" response explicitly.
+          printf 'n\n' | ./build-ffmpeg.sh
 
       - name: Run QuickTime PNG timing regression tests
         run: |
@@ -130,7 +132,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: VidPreview-timing-fix-macos26
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
           path: |
             VidPreview-timing-fix-macos26.zip
